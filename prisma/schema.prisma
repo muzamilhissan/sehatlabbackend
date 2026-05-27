@@ -37,6 +37,8 @@ model Patient {
   source    String     @default("Walk-in")
   createdAt DateTime   @default(now())
   orders    LabOrder[]
+
+  @@index([userId])
 }
 
 model TestTemplate {
@@ -50,6 +52,8 @@ model TestTemplate {
   updatedAt       DateTime        @updatedAt
   parameters      TestParameter[]
   orders          LabOrder[]
+
+  @@index([userId])
 }
 
 model TestParameter {
@@ -61,6 +65,8 @@ model TestParameter {
   testTemplateId String
   testTemplate   TestTemplate @relation(fields: [testTemplateId], references: [id], onDelete: Cascade)
   results        LabResult[]
+
+  @@index([testTemplateId])
 }
 
 model LabOrder {
@@ -79,6 +85,10 @@ model LabOrder {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   results         LabResult[]
+
+  @@index([userId])
+  @@index([patientId])
+  @@index([testTemplateId])
 }
 
 model LabResult {
