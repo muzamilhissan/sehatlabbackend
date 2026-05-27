@@ -18,6 +18,7 @@ const prisma = new PrismaClient();
 const allowedOrigins = [
   'https://lab.sehatdoc.com',
   'http://localhost:4010',
+  'https://sehatlabvercel.vercel.app',
 ];
 app.use(
   cors({
