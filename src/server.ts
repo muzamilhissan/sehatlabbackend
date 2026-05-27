@@ -16,7 +16,7 @@ const PORT = Number(process.env.PORT) || 6010;
 const prisma = new PrismaClient();
 
 const allowedOrigins = [
-  'https://lab.sehatdoc.com',
+  'https://labs.sehatdoc.com',
   'http://localhost:4010',
   'https://sehatlabvercel.vercel.app',
 ];
