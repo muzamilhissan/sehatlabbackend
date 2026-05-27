@@ -1,0 +1,96 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Example model to allow Prisma Client to generate
+model User {
+  id        Int            @id @default(autoincrement())
+  email     String         @unique
+  password  String
+  name      String?
+  cnic      String?
+  settings  String?
+  patients  Patient[]
+  templates TestTemplate[]
+  orders    LabOrder[]
+}
+
+model Patient {
+  id        String     @id @default(uuid())
+  userId    Int?
+  user      User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  age       String
+  gender    String
+  contact   String?
+  cnic      String?
+  address   String?
+  source    String     @default("Walk-in")
+  createdAt DateTime   @default(now())
+  orders    LabOrder[]
+}
+
+model TestTemplate {
+  id              String          @id @default(uuid())
+  userId          Int?
+  user            User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  category        String
+  defaultComments String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  parameters      TestParameter[]
+  orders          LabOrder[]
+}
+
+model TestParameter {
+  id             String       @id @default(uuid())
+  name           String
+  unit           String
+  min            Float?
+  max            Float?
+  testTemplateId String
+  testTemplate   TestTemplate @relation(fields: [testTemplateId], references: [id], onDelete: Cascade)
+  results        LabResult[]
+}
+
+model LabOrder {
+  id              String        @id @default(uuid())
+  userId          Int?
+  user            User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sampleId        String        @unique
+  patientId       String
+  patient         Patient       @relation(fields: [patientId], references: [id])
+  testTemplateId  String
+  testTemplate    TestTemplate  @relation(fields: [testTemplateId], references: [id])
+  status          String        @default("PENDING")
+  urgency         String        @default("Routine")
+  referringDoctor String?
+  remarks         String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  results         LabResult[]
+}
+
+model LabResult {
+  id              String        @id @default(uuid())
+  labOrderId      String
+  labOrder        LabOrder      @relation(fields: [labOrderId], references: [id], onDelete: Cascade)
+  testParameterId String
+  testParameter   TestParameter @relation(fields: [testParameterId], references: [id])
+  value           String?
+  isAbnormal      Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([labOrderId, testParameterId])
+}
