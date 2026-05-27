@@ -19,6 +19,7 @@ model User {
   name      String?
   cnic      String?
   settings  String?
+  isFrozen  Boolean        @default(false)
   patients  Patient[]
   templates TestTemplate[]
   orders    LabOrder[]

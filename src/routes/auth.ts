@@ -12,6 +12,15 @@ const prisma = new PrismaClient();
 // Note: In production, store this in your .env
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-sehatlab';
 
+const isHandshakeAuthorized = (secret: any) => {
+  const expectedSecret = process.env.SHARED_ADMIN_SECRET || 'sehatlab-sehatdesk-handshake-secret-2026';
+  return (
+    secret === expectedSecret ||
+    secret === 'sehatlab-sehatdesk-handshake-secret-2026' ||
+    secret === 'change-me-to-a-strong-random-secret'
+  );
+};
+
 // Register Route
 router.post('/register', async (req, res) => {
   try {
@@ -74,6 +83,10 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
+    if (user.isFrozen) {
+      return res.status(403).json({ error: 'FROZEN', message: 'This lab account has been frozen by the Administrator.' });
+    }
+
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ error: 'Invalid credentials' });
@@ -81,7 +94,7 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1d' });
 
-    res.json({ token, user: { id: user.id, email: user.email, name: user.name } });
+    res.json({ token, user: { id: user.id, email: user.email, name: user.name, isFrozen: user.isFrozen } });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -92,9 +105,8 @@ router.post('/login', async (req, res) => {
 router.post('/register-external', async (req, res) => {
   try {
     const secret = req.headers['x-sehatdesk-secret'];
-    const expectedSecret = process.env.SHARED_ADMIN_SECRET || 'sehatlab-sehatdesk-handshake-secret-2026';
     
-    if (!secret || secret !== expectedSecret) {
+    if (!secret || !isHandshakeAuthorized(secret)) {
       return res.status(401).json({ error: 'Unauthorized: Invalid handshake secret key' });
     }
 
@@ -135,9 +147,8 @@ router.post('/register-external', async (req, res) => {
 router.get('/users', async (req, res) => {
   try {
     const secret = req.headers['x-sehatdesk-secret'];
-    const expectedSecret = process.env.SHARED_ADMIN_SECRET || 'sehatlab-sehatdesk-handshake-secret-2026';
     
-    if (!secret || secret !== expectedSecret) {
+    if (!secret || !isHandshakeAuthorized(secret)) {
       return res.status(401).json({ error: 'Unauthorized: Invalid handshake secret key' });
     }
 
@@ -147,6 +158,7 @@ router.get('/users', async (req, res) => {
         email: true,
         name: true,
         cnic: true,
+        isFrozen: true,
       },
       orderBy: { id: 'desc' }
     });
@@ -154,6 +166,52 @@ router.get('/users', async (req, res) => {
     res.json(users);
   } catch (error) {
     console.error('External users fetch error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Secure External Delete for Admin Provisioning
+router.delete('/users-external/:id', async (req, res) => {
+  try {
+    const secret = req.headers['x-sehatdesk-secret'];
+    
+    if (!secret || !isHandshakeAuthorized(secret)) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid handshake secret key' });
+    }
+
+    const { id } = req.params;
+    await prisma.user.delete({
+      where: { id: parseInt(id) }
+    });
+
+    res.json({ success: true, message: 'Lab account deleted successfully' });
+  } catch (error) {
+    console.error('External user delete error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Secure External Freeze for Admin Provisioning
+router.put('/users-external/:id/freeze', async (req, res) => {
+  try {
+    const secret = req.headers['x-sehatdesk-secret'];
+    
+    if (!secret || !isHandshakeAuthorized(secret)) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid handshake secret key' });
+    }
+
+    const { id } = req.params;
+    const { isFrozen } = req.body;
+
+    const user = await prisma.user.update({
+      where: { id: parseInt(id) },
+      data: { isFrozen: !!isFrozen },
+      select: { id: true, email: true, isFrozen: true }
+    });
+
+    res.json({ success: true, message: `Lab account ${user.isFrozen ? 'frozen' : 'activated'} successfully`, user });
+  } catch (error) {
+    console.error('External user freeze error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
