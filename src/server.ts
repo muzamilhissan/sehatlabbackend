@@ -22,6 +22,8 @@ const allowedOrigins = [
   'https://labs.sehatdoc.com',
   'http://localhost:4010',
   'https://sehatlabvercel.vercel.app',
+  'http://localhost:3000',
+  'https://www.sehatdoc.com',
 ];
 app.use(
   cors({
