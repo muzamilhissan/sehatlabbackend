@@ -34,8 +34,8 @@ router.get('/', async (req: AuthRequest, res) => {
     });
 
     let integratedPatients: any[] = [];
-    // Only search/import remote SehatDoc patients when actively searching to reduce database and network load
-    if (search && user && user.settings) {
+    // Fetch and sync integrated SehatDoc patients
+    if (user && user.settings) {
       try {
         const settings = JSON.parse(user.settings);
         const conn = settings.sehatdocConnection;
