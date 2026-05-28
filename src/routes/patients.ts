@@ -38,7 +38,7 @@ router.get('/', async (req: AuthRequest, res) => {
         const settings = JSON.parse(user.settings);
         const conn = settings.sehatdocConnection;
         if (conn && conn.isConnected) {
-          const sehatdocBaseUrl = process.env.SEHATDOC_API_URL || 'http://localhost:5001';
+          const sehatdocBaseUrl = (process.env.SEHATDOC_API_URL || 'http://localhost:5001').replace(/\/api$/, '');
           const queryUrl = `${sehatdocBaseUrl}/api/public/sehatlab/patients?search=${encodeURIComponent((search as string) || '')}`;
           const searchRes = await fetch(queryUrl, {
             headers: {

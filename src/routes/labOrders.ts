@@ -365,7 +365,7 @@ router.post('/:id/approve-report', async (req: AuthRequest, res) => {
 
         if (conn && conn.isConnected && order.patient.source === 'SehatDoc') {
           // Send PDF payload directly to SehatDoc webhook
-          const sehatdocBaseUrl = process.env.SEHATDOC_API_URL || 'http://localhost:5001';
+          const sehatdocBaseUrl = (process.env.SEHATDOC_API_URL || 'http://localhost:5001').replace(/\/api$/, '');
 
           const uploadRes = await fetch(`${sehatdocBaseUrl}/api/public/sehatlab/webhook/approve-report`, {
             method: 'POST',

@@ -310,7 +310,7 @@ router.get('/sehatdoc-lookup', authenticateToken as any, async (req: AuthRequest
       return res.status(400).json({ error: 'Email is required' });
     }
     // Query SehatDoc backend
-    const sehatdocBaseUrl = process.env.SEHATDOC_API_URL || 'http://localhost:5001';
+    const sehatdocBaseUrl = (process.env.SEHATDOC_API_URL || 'http://localhost:5001').replace(/\/api$/, '');
     const lookupRes = await fetch(`${sehatdocBaseUrl}/api/public/clinic-by-email?email=${encodeURIComponent(email as string)}`);
     const text = await lookupRes.text();
     
@@ -365,7 +365,7 @@ router.post('/sehatdoc-connect', authenticateToken as any, async (req: AuthReque
     const labSecret = crypto.randomUUID();
 
     // Query SehatDoc public connection request endpoint
-    const sehatdocBaseUrl = process.env.SEHATDOC_API_URL || 'http://localhost:5001';
+    const sehatdocBaseUrl = (process.env.SEHATDOC_API_URL || 'http://localhost:5001').replace(/\/api$/, '');
     const labUrl = process.env.SEHATLAB_BACKEND_URL || 'http://localhost:6010';
     console.log('[sehatdoc-connect] Sending request to:', `${sehatdocBaseUrl}/api/public/sehatlab/request-connection`);
     console.log('[sehatdoc-connect] labUrl callback set to:', labUrl);
