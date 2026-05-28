@@ -363,7 +363,7 @@ router.post('/:id/approve-report', async (req: AuthRequest, res) => {
         const settings = JSON.parse(user.settings);
         const conn = settings.sehatdocConnection;
 
-        if (conn && conn.isConnected && order.patient.source === 'SehatDoc') {
+        if (conn && conn.isConnected) {
           // Send PDF payload directly to SehatDoc webhook
           const sehatdocBaseUrl = (process.env.SEHATDOC_API_URL || 'http://localhost:5001').replace(/\/api$/, '');
 
@@ -377,7 +377,15 @@ router.post('/:id/approve-report', async (req: AuthRequest, res) => {
               patientId: order.patientId,
               pdfBase64,
               filename: filename || `LabReport_${order.patient.name.replace(/\s+/g, '_')}_${order.sampleId}.pdf`,
-              notes: `Approved lab report uploaded seamlessly by connected SehatLab for order ${order.sampleId}`
+              notes: `Approved lab report uploaded seamlessly by connected SehatLab for order ${order.sampleId}`,
+              patientDetails: {
+                name: order.patient.name,
+                age: order.patient.age,
+                gender: order.patient.gender,
+                contact: order.patient.contact,
+                cnic: order.patient.cnic,
+                address: order.patient.address
+              }
             })
           });
 

@@ -6,6 +6,7 @@ import { authenticateToken, AuthRequest } from '../middleware/auth';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { copyDefaultTemplatesForUser } from '../utils/defaultTemplates';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -46,6 +47,9 @@ router.post('/register', async (req, res) => {
       },
     });
 
+    // Copy default test templates for the newly registered lab user
+    await copyDefaultTemplatesForUser(user.id);
+
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1d' });
 
     res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name } });
@@ -77,6 +81,8 @@ router.post('/login', async (req, res) => {
           cnic: '00000-0000000-0'
         }
       });
+      // Copy default test templates for self-healed admin user
+      await copyDefaultTemplatesForUser(user.id);
       console.log('Self-healed: Provisioned default admin@sehatlab.com account successfully.');
     }
 
@@ -132,6 +138,9 @@ router.post('/register-external', async (req, res) => {
         cnic,
       },
     });
+
+    // Copy default test templates for external registered lab user
+    await copyDefaultTemplatesForUser(user.id);
 
     res.status(201).json({ 
       success: true, 
