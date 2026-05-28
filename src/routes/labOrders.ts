@@ -6,6 +6,152 @@ import { authenticateToken, AuthRequest } from '../middleware/auth';
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// Public endpoint for connected SehatDoc clinics to request a diagnostic test
+router.post('/public/request-test', async (req, res) => {
+  try {
+    const sehatdocSecret = req.headers['x-sehatdoc-secret'] as string;
+    const labSecret = req.headers['authorization']?.split(' ')[1] as string;
+
+    if (!sehatdocSecret || !labSecret) {
+      res.status(401).json({ error: 'Missing security credentials' });
+      return;
+    }
+
+    // Verify lab exists and secrets match
+    const labUser = await prisma.user.findFirst({
+      where: {
+        settings: {
+          contains: labSecret
+        }
+      }
+    });
+
+    if (!labUser) {
+      res.status(401).json({ error: 'Unauthorized: Invalid credentials' });
+      return;
+    }
+
+    const settings = JSON.parse(labUser.settings || '{}');
+    const conn = settings.sehatdocConnection;
+
+    if (!conn || !conn.isConnected || conn.sehatdocSecret !== sehatdocSecret) {
+      res.status(401).json({ error: 'Unauthorized: Connection inactive or signature mismatch' });
+      return;
+    }
+
+    // Handshake successful! Let's extract patient and test request details
+    const { patient, testTemplateId, urgency, referringDoctor } = req.body;
+    if (!patient || !testTemplateId) {
+      res.status(400).json({ error: 'Missing patient or test template ID' });
+      return;
+    }
+
+    // Find or create patient in SehatLab database to match consistency
+    let labPatient = await prisma.patient.findUnique({
+      where: { id: patient.id }
+    });
+
+    if (!labPatient) {
+      labPatient = await prisma.patient.create({
+        data: {
+          id: patient.id, // Consistent UUID!
+          name: patient.name,
+          age: patient.age ? patient.age.toString() : '0',
+          gender: patient.gender ? patient.gender.toString() : 'UNKNOWN',
+          contact: patient.contact || '',
+          cnic: patient.cnic || '',
+          source: 'SehatDoc'
+        }
+      });
+    }
+
+    // Generate unique Sample ID
+    const sampleId = 'SMP-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+
+    // Create the pending lab order!
+    const order = await prisma.labOrder.create({
+      data: {
+        userId: labUser.id, // Owned by the connected lab admin
+        patientId: labPatient.id,
+        testTemplateId,
+        urgency: urgency || 'ROUTINE',
+        referringDoctor: referringDoctor || 'SehatDoc Requested',
+        sampleId
+      },
+      include: {
+        testTemplate: true,
+        patient: true
+      }
+    });
+
+    res.status(201).json({ success: true, message: 'Lab test request created successfully in SehatLab queue', order });
+  } catch (error: any) {
+    console.error('Public request-test error:', error);
+    res.status(500).json({ error: 'Internal server error while processing request' });
+  }
+});
+
+// Integration stats endpoint queried by SehatDoc (Unauthenticated but validated)
+router.get('/integration-stats', async (req, res) => {
+  try {
+    const sehatdocSecret = req.headers['x-sehatdoc-secret'] as string;
+    if (!sehatdocSecret) {
+      return res.status(401).json({ error: 'Unauthorized: Missing x-sehatdoc-secret header' });
+    }
+
+    // Search for connected lab settings with this secret
+    const users = await prisma.user.findMany({
+      where: { NOT: { settings: null } }
+    });
+
+    let connectedUser = null;
+    for (const u of users) {
+      try {
+        const settings = JSON.parse(u.settings || '{}');
+        if (settings.sehatdocConnection && settings.sehatdocConnection.sehatdocSecret === sehatdocSecret && settings.sehatdocConnection.isConnected) {
+          connectedUser = u;
+          break;
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    if (!connectedUser) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid integration credentials' });
+    }
+
+    // Calculate aggregated metrics
+    const totalOrders = await prisma.labOrder.count({
+      where: { userId: connectedUser.id }
+    });
+
+    const pendingOrders = await prisma.labOrder.count({
+      where: { userId: connectedUser.id, status: 'PENDING' }
+    });
+
+    const completedOrders = await prisma.labOrder.count({
+      where: { userId: connectedUser.id, status: 'COMPLETED' }
+    });
+
+    const abnormalResults = await prisma.labResult.count({
+      where: {
+        isAbnormal: true,
+        labOrder: { userId: connectedUser.id }
+      }
+    });
+
+    res.json({
+      totalOrders,
+      pendingOrders,
+      completedOrders,
+      abnormalResults,
+      status: 'ACTIVE'
+    });
+  } catch (error) {
+    console.error('integration-stats Error:', error);
+    res.status(500).json({ error: 'Failed to retrieve integrated metrics summary' });
+  }
+});
+
 // Enforce authentication across all lab orders
 router.use(authenticateToken as any);
 
@@ -177,6 +323,93 @@ router.post('/:id/results', async (req: AuthRequest, res) => {
   } catch (error) {
     console.error('Error saving lab results:', error);
     res.status(500).json({ error: 'Failed to save lab results' });
+  }
+});
+
+// Approve lab results and trigger SehatDoc integration webhook (Authenticated)
+router.post('/:id/approve-report', async (req: AuthRequest, res) => {
+  try {
+    const { pdfBase64, filename } = req.body;
+    const orderId = req.params.id;
+
+    if (!pdfBase64) {
+      return res.status(400).json({ error: 'pdfBase64 is required' });
+    }
+
+    const order = await prisma.labOrder.findFirst({
+      where: {
+        id: orderId as string,
+        userId: req.userId
+      },
+      include: {
+        patient: true
+      }
+    });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Lab order not found' });
+    }
+
+    // Check if integrated with SehatDoc
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId }
+    });
+
+    let isSynced = false;
+    let syncResult = null;
+
+    if (user && user.settings) {
+      try {
+        const settings = JSON.parse(user.settings);
+        const conn = settings.sehatdocConnection;
+
+        if (conn && conn.isConnected && order.patient.source === 'SehatDoc') {
+          // Send PDF payload directly to SehatDoc webhook
+          const sehatdocBaseUrl = process.env.SEHATDOC_API_URL || 'http://localhost:5001';
+
+          const uploadRes = await fetch(`${sehatdocBaseUrl}/api/public/sehatlab/webhook/approve-report`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-sehatlab-secret': conn.labSecret || ''
+            },
+            body: JSON.stringify({
+              patientId: order.patientId,
+              pdfBase64,
+              filename: filename || `LabReport_${order.patient.name.replace(/\s+/g, '_')}_${order.sampleId}.pdf`,
+              notes: `Approved lab report uploaded seamlessly by connected SehatLab for order ${order.sampleId}`
+            })
+          });
+
+          if (!uploadRes.ok) {
+            const err = await uploadRes.json();
+            return res.status(uploadRes.status).json({ error: err.error || 'Failed to sync document with SehatDoc webhook' });
+          }
+
+          isSynced = true;
+          syncResult = await uploadRes.json();
+        }
+      } catch (err) {
+        console.error('Error parsing settings or connecting to SehatDoc:', err);
+      }
+    }
+
+    // Update status to APPROVED inside SehatLab
+    await prisma.labOrder.update({
+      where: { id: orderId as string },
+      data: {
+        status: 'APPROVED'
+      }
+    });
+
+    if (isSynced) {
+      res.json({ success: true, message: 'Lab report successfully approved and synced to SehatDoc via webhook', file: syncResult?.file });
+    } else {
+      res.json({ success: true, message: 'Lab report successfully approved locally inside SehatLab' });
+    }
+  } catch (error: any) {
+    console.error('upload-report Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to upload report to integration portal' });
   }
 });
 

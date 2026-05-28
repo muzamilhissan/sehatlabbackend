@@ -177,4 +177,118 @@ router.post('/:id/results', (req, res) => __awaiter(void 0, void 0, void 0, func
         res.status(500).json({ error: 'Failed to save lab results' });
     }
 }));
+// Upload PDF report to SehatDoc integration vault (Authenticated)
+router.post('/:id/upload-report', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { pdfBase64, filename } = req.body;
+        const orderId = req.params.id;
+        if (!pdfBase64) {
+            return res.status(400).json({ error: 'pdfBase64 is required' });
+        }
+        const order = yield prisma.labOrder.findFirst({
+            where: {
+                id: orderId,
+                userId: req.userId
+            },
+            include: {
+                patient: true
+            }
+        });
+        if (!order) {
+            return res.status(404).json({ error: 'Lab order not found' });
+        }
+        // Check if integrated with SehatDoc
+        const user = yield prisma.user.findUnique({
+            where: { id: req.userId }
+        });
+        if (!user || !user.settings) {
+            return res.status(400).json({ error: 'Integration settings not configured' });
+        }
+        const settings = JSON.parse(user.settings);
+        const conn = settings.sehatdocConnection;
+        if (!conn || !conn.isConnected || order.patient.source !== 'SehatDoc') {
+            return res.status(400).json({ error: 'This patient is not connected to a SehatDoc Clinic' });
+        }
+        // Send PDF Blob to SehatDoc backend
+        const sehatdocBaseUrl = process.env.SEHATDOC_API_URL || 'http://localhost:5001';
+        // Construct multi-part form data in memory
+        const buffer = Buffer.from(pdfBase64, 'base64');
+        const blob = new Blob([buffer], { type: 'application/pdf' });
+        const formData = new FormData();
+        formData.append('file', blob, filename || `LabReport_${order.patient.name.replace(/\s+/g, '_')}_${order.sampleId}.pdf`);
+        formData.append('documentType', 'LAB_REPORT');
+        formData.append('notes', `Authorized lab report uploaded by SehatLab for order ${order.sampleId}`);
+        const uploadRes = yield fetch(`${sehatdocBaseUrl}/api/public/sehatlab/patients/${order.patientId}/files`, {
+            method: 'POST',
+            headers: {
+                'x-sehatlab-secret': conn.labSecret || ''
+            },
+            body: formData
+        });
+        if (!uploadRes.ok) {
+            const err = yield uploadRes.json();
+            return res.status(uploadRes.status).json({ error: err.error || 'Failed to sync document with SehatDoc' });
+        }
+        const result = yield uploadRes.json();
+        res.json({ success: true, message: 'Lab report successfully synced to SehatDoc and backed by R2', file: result.file });
+    }
+    catch (error) {
+        console.error('upload-report Error:', error);
+        res.status(500).json({ error: error.message || 'Failed to upload report to integration portal' });
+    }
+}));
+// Integration stats endpoint queried by SehatDoc (Unauthenticated but validated)
+router.get('/integration-stats', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const sehatdocSecret = req.headers['x-sehatdoc-secret'];
+        if (!sehatdocSecret) {
+            return res.status(401).json({ error: 'Unauthorized: Missing x-sehatdoc-secret header' });
+        }
+        // Search for connected lab settings with this secret
+        const users = yield prisma.user.findMany({
+            where: { NOT: { settings: null } }
+        });
+        let connectedUser = null;
+        for (const u of users) {
+            try {
+                const settings = JSON.parse(u.settings || '{}');
+                if (settings.sehatdocConnection && settings.sehatdocConnection.sehatdocSecret === sehatdocSecret && settings.sehatdocConnection.isConnected) {
+                    connectedUser = u;
+                    break;
+                }
+            }
+            catch (e) { /* ignore */ }
+        }
+        if (!connectedUser) {
+            return res.status(401).json({ error: 'Unauthorized: Invalid integration credentials' });
+        }
+        // Calculate aggregated metrics
+        const totalOrders = yield prisma.labOrder.count({
+            where: { userId: connectedUser.id }
+        });
+        const pendingOrders = yield prisma.labOrder.count({
+            where: { userId: connectedUser.id, status: 'PENDING' }
+        });
+        const completedOrders = yield prisma.labOrder.count({
+            where: { userId: connectedUser.id, status: 'COMPLETED' }
+        });
+        const abnormalResults = yield prisma.labResult.count({
+            where: {
+                isAbnormal: true,
+                labOrder: { userId: connectedUser.id }
+            }
+        });
+        res.json({
+            totalOrders,
+            pendingOrders,
+            completedOrders,
+            abnormalResults,
+            status: 'ACTIVE'
+        });
+    }
+    catch (error) {
+        console.error('integration-stats Error:', error);
+        res.status(500).json({ error: 'Failed to retrieve integrated metrics summary' });
+    }
+}));
 exports.default = router;

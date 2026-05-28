@@ -17,7 +17,12 @@ const app = (0, express_1.default)();
 const PORT = Number(process.env.PORT) || 6010;
 const prisma = new client_1.PrismaClient();
 const allowedOrigins = [
-    'https://lab.sehatdoc.com',
+    'http://168.144.26.176:8000',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'https://labs.sehatdoc.com',
+    'http://localhost:4010',
+    'https://sehatlabvercel.vercel.app',
 ];
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {

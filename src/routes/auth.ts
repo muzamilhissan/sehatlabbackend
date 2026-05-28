@@ -312,15 +312,168 @@ router.get('/sehatdoc-lookup', authenticateToken as any, async (req: AuthRequest
     // Query SehatDoc backend
     const sehatdocBaseUrl = process.env.SEHATDOC_API_URL || 'http://localhost:5001';
     const lookupRes = await fetch(`${sehatdocBaseUrl}/api/public/clinic-by-email?email=${encodeURIComponent(email as string)}`);
+    const text = await lookupRes.text();
+    
     if (!lookupRes.ok) {
-      const errData = await lookupRes.json();
-      return res.status(lookupRes.status).json({ error: errData.error || 'Failed to verify SehatDoc account' });
+      let errMessage = 'Failed to verify SehatDoc account';
+      try {
+        const errData = JSON.parse(text);
+        errMessage = errData.error || errMessage;
+      } catch (e) {}
+      return res.status(lookupRes.status).json({ error: errMessage });
     }
-    const data = await lookupRes.json();
-    res.json(data);
+
+    try {
+      const data = JSON.parse(text);
+      res.json(data);
+    } catch (parseErr) {
+      console.error('Failed to parse SehatDoc lookup JSON response:', text.substring(0, 100));
+      res.status(502).json({ error: 'SehatDoc integration server returned an invalid response. Please check configuration.' });
+    }
   } catch (error) {
     console.error('Error during SehatDoc lookup proxy:', error);
     res.status(500).json({ error: 'Failed to connect to SehatDoc server' });
+  }
+});
+
+// Request Connection handshake to SehatDoc (Authenticated)
+router.post('/sehatdoc-connect', authenticateToken as any, async (req: AuthRequest, res) => {
+  try {
+    const { email, clinicId, clinicName } = req.body;
+    if (!email || !clinicId || !clinicName) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    let settings: any = {};
+    if (user.settings) {
+      try {
+        settings = JSON.parse(user.settings);
+      } catch (e) {
+        settings = {};
+      }
+    }
+
+    // Generate unique integration secret for SehatLab (UUID)
+    const labSecret = crypto.randomUUID();
+
+    // Query SehatDoc public connection request endpoint
+    const sehatdocBaseUrl = process.env.SEHATDOC_API_URL || 'http://localhost:5001';
+    const requestRes = await fetch(`${sehatdocBaseUrl}/api/public/sehatlab/request-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clinicId,
+        labId: user.id.toString(),
+        labName: settings.labName || user.name || 'SehatLab Diagnostic Centre',
+        labEmail: user.email,
+        labSecret,
+        labUrl: process.env.SEHATLAB_BACKEND_URL || 'http://localhost:6010'
+      })
+    });
+
+    if (!requestRes.ok) {
+      const err = await requestRes.json();
+      return res.status(requestRes.status).json({ error: err.error || 'Failed to submit connection request' });
+    }
+
+    // Save pending connection locally
+    settings.sehatdocConnection = {
+      isConnected: false,
+      isPending: true,
+      labSecret,
+      sehatdocEmail: email,
+      sehatdocClinicId: clinicId,
+      sehatdocClinicName: clinicName,
+      labUrl: process.env.SEHATLAB_BACKEND_URL || 'http://localhost:6010'
+    };
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { settings: JSON.stringify(settings) }
+    });
+
+    res.json({ success: true, message: 'Connection request successfully sent' });
+  } catch (error) {
+    console.error('sehatdoc-connect Error:', error);
+    res.status(500).json({ error: 'Failed to initiate handshake connection' });
+  }
+});
+
+// Webhook endpoint called by SehatDoc to confirm approval (Unauthenticated but validated)
+router.post('/sehatdoc-confirm', async (req, res) => {
+  try {
+    const { clinicId, clinicName, sehatdocSecret, labId } = req.body;
+    if (!clinicId || !clinicName || !sehatdocSecret || !labId) {
+      return res.status(400).json({ error: 'Missing webhook configuration details' });
+    }
+
+    const labUser = await prisma.user.findUnique({
+      where: { id: parseInt(labId) }
+    });
+
+    if (!labUser || !labUser.settings) {
+      return res.status(404).json({ error: 'Lab account settings not initialized' });
+    }
+
+    let settings = JSON.parse(labUser.settings);
+    const conn = settings.sehatdocConnection;
+
+    if (!conn) {
+      return res.status(400).json({ error: 'No active connection configuration found for this lab' });
+    }
+
+    // Approve the pending connection
+    conn.isConnected = true;
+    conn.isPending = false;
+    conn.sehatdocClinicId = clinicId;
+    conn.sehatdocClinicName = clinicName;
+    conn.sehatdocSecret = sehatdocSecret;
+
+    await prisma.user.update({
+      where: { id: parseInt(labId) },
+      data: { settings: JSON.stringify(settings) }
+    });
+
+    res.json({ success: true, message: 'Dynamic data integration handshake confirmed successfully' });
+  } catch (error) {
+    console.error('Confirm Webhook Error:', error);
+    res.status(500).json({ error: 'Failed to process confirmation webhook callback' });
+  }
+});
+
+// Disconnect from SehatDoc integration (Authenticated)
+router.post('/sehatdoc-disconnect', authenticateToken as any, async (req: AuthRequest, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId }
+    });
+
+    if (!user || !user.settings) {
+      return res.status(404).json({ error: 'User settings not found' });
+    }
+
+    let settings = JSON.parse(user.settings);
+    if (settings.sehatdocConnection) {
+      delete settings.sehatdocConnection;
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { settings: JSON.stringify(settings) }
+    });
+
+    res.json({ success: true, message: 'Disconnected from SehatDoc successfully' });
+  } catch (error) {
+    console.error('sehatdoc-disconnect Error:', error);
+    res.status(500).json({ error: 'Failed to disconnect integration settings' });
   }
 });
 

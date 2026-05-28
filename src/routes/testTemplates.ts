@@ -5,6 +5,67 @@ import { authenticateToken, AuthRequest } from '../middleware/auth';
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// Public endpoint for connected SehatDoc clinics to get test templates list
+router.get('/public/list', async (req, res) => {
+  try {
+    const sehatdocSecret = req.headers['x-sehatdoc-secret'] as string;
+    const labSecret = req.headers['authorization']?.split(' ')[1] as string;
+
+    if (!sehatdocSecret || !labSecret) {
+      res.status(401).json({ error: 'Missing security credentials' });
+      return;
+    }
+
+    // Verify lab exists and secrets match
+    const labUser = await prisma.user.findFirst({
+      where: {
+        settings: {
+          contains: labSecret
+        }
+      }
+    });
+
+    if (!labUser) {
+      res.status(401).json({ error: 'Unauthorized: Invalid credentials' });
+      return;
+    }
+
+    const settings = JSON.parse(labUser.settings || '{}');
+    const conn = settings.sehatdocConnection;
+
+    if (!conn || !conn.isConnected || conn.sehatdocSecret !== sehatdocSecret) {
+      res.status(401).json({ error: 'Unauthorized: Connection inactive or signature mismatch' });
+      return;
+    }
+
+    // Retrieve system templates and the specific lab user's custom templates
+    const templates = await prisma.testTemplate.findMany({
+      where: {
+        OR: [
+          { userId: labUser.id },
+          { userId: null } // System defaults
+        ]
+      },
+      include: {
+        parameters: true
+      },
+      orderBy: { name: 'asc' }
+    });
+
+    const formatted = templates.map(t => ({
+      id: t.id,
+      name: t.name,
+      category: t.category,
+      parametersCount: t.parameters.length
+    }));
+
+    res.json(formatted);
+  } catch (error: any) {
+    console.error('Public test list error:', error);
+    res.status(500).json({ error: 'Failed to retrieve test templates list' });
+  }
+});
+
 // Enforce authentication across all template routes
 router.use(authenticateToken as any);
 
