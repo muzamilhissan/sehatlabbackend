@@ -41,6 +41,22 @@ app.use('/sehatlab/api/patients', patientRoutes);
 app.use('/sehatlab/api/test-templates', testTemplateRoutes);
 app.use('/sehatlab/api/lab-orders', labOrderRoutes);
 
+// Root route — prevents "Cannot GET /" on deployed URL
+app.get('/', (_req, res) => {
+  res.json({
+    service: 'SehatLab Backend',
+    status: 'running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/sehatlab/api/health',
+      auth: '/sehatlab/api/auth',
+      patients: '/sehatlab/api/patients',
+      testTemplates: '/sehatlab/api/test-templates',
+      labOrders: '/sehatlab/api/lab-orders',
+    },
+  });
+});
+
 app.get('/sehatlab/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'sehatlab-backend' });
 });
