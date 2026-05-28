@@ -24,7 +24,8 @@ router.get('/', async (req: AuthRequest, res) => {
 
     const localPatients = await prisma.patient.findMany({
       where: localWhere,
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      take: search ? undefined : 100
     });
 
     // Check if integrated with SehatDoc
@@ -33,7 +34,8 @@ router.get('/', async (req: AuthRequest, res) => {
     });
 
     let integratedPatients: any[] = [];
-    if (user && user.settings) {
+    // Only search/import remote SehatDoc patients when actively searching to reduce database and network load
+    if (search && user && user.settings) {
       try {
         const settings = JSON.parse(user.settings);
         const conn = settings.sehatdocConnection;
@@ -59,6 +61,8 @@ router.get('/', async (req: AuthRequest, res) => {
                 source: 'SehatDoc'
               }));
             }
+          } else {
+            console.error(`SehatDoc patients fetch failed with status: ${searchRes.status} and body: ${await searchRes.text()}`);
           }
         }
       } catch (err) {
