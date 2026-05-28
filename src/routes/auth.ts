@@ -428,7 +428,7 @@ router.post('/sehatdoc-connect', authenticateToken as any, async (req: AuthReque
 // Webhook endpoint called by SehatDoc to confirm approval (Unauthenticated but validated)
 router.post('/sehatdoc-confirm', async (req, res) => {
   try {
-    const { clinicId, clinicName, sehatdocSecret, labId } = req.body;
+    const { clinicId, clinicName, sehatdocSecret, labId, labSecret, labEmail, labName, sehatdocEmail } = req.body;
     if (!clinicId || !clinicName || !sehatdocSecret || !labId) {
       return res.status(400).json({ error: 'Missing webhook configuration details' });
     }
@@ -437,35 +437,52 @@ router.post('/sehatdoc-confirm', async (req, res) => {
       where: { id: parseInt(labId) }
     });
 
-    if (!labUser || !labUser.settings) {
-      return res.status(404).json({ error: 'Lab account settings not initialized' });
+    if (!labUser) {
+      return res.status(404).json({ error: 'Lab user not found' });
     }
 
-    let settings = JSON.parse(labUser.settings);
-    const conn = settings.sehatdocConnection;
-
-    if (!conn) {
-      return res.status(400).json({ error: 'No active connection configuration found for this lab' });
+    // Parse existing settings (or initialize if missing)
+    let settings: any = {};
+    if (labUser.settings) {
+      try {
+        settings = JSON.parse(labUser.settings);
+      } catch (e) {
+        settings = {};
+      }
     }
 
-    // Approve the pending connection
-    conn.isConnected = true;
-    conn.isPending = false;
-    conn.sehatdocClinicId = clinicId;
-    conn.sehatdocClinicName = clinicName;
-    conn.sehatdocSecret = sehatdocSecret;
+    // Upsert the connection — works whether or not a pending connection exists
+    // This handles the split-brain case where local & Render DBs are different
+    const existingConn = settings.sehatdocConnection || {};
+    settings.sehatdocConnection = {
+      // Preserve any existing details (labSecret, labEmail etc from prior connect)
+      ...existingConn,
+      // Override with confirmed values from SehatDoc
+      isConnected: true,
+      isPending: false,
+      sehatdocClinicId: clinicId,
+      sehatdocClinicName: clinicName,
+      sehatdocSecret,
+      // Fill in connection details if provided (SehatDoc now sends these)
+      ...(labSecret  && { labSecret }),
+      ...(labEmail   && { sehatdocEmail: labEmail }),
+      ...(labName    && { labName }),
+      ...(sehatdocEmail && { sehatdocEmail }),
+    };
 
     await prisma.user.update({
       where: { id: parseInt(labId) },
       data: { settings: JSON.stringify(settings) }
     });
 
+    console.log(`[sehatdoc-confirm] Connection confirmed for labId=${labId}, clinicId=${clinicId}`);
     res.json({ success: true, message: 'Dynamic data integration handshake confirmed successfully' });
   } catch (error) {
     console.error('Confirm Webhook Error:', error);
     res.status(500).json({ error: 'Failed to process confirmation webhook callback' });
   }
 });
+
 
 // Disconnect from SehatDoc integration (Authenticated)
 router.post('/sehatdoc-disconnect', authenticateToken as any, async (req: AuthRequest, res) => {
