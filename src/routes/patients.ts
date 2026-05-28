@@ -24,8 +24,7 @@ router.get('/', async (req: AuthRequest, res) => {
 
     const localPatients = await prisma.patient.findMany({
       where: localWhere,
-      orderBy: { createdAt: 'desc' },
-      take: search ? undefined : 100
+      orderBy: { createdAt: 'desc' }
     });
 
     // Check if integrated with SehatDoc
