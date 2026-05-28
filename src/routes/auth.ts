@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -362,7 +363,7 @@ router.post('/sehatdoc-connect', authenticateToken as any, async (req: AuthReque
     }
 
     // Generate unique integration secret for SehatLab (UUID)
-    const labSecret = crypto.randomUUID();
+    const labSecret = randomUUID();
 
     // Query SehatDoc public connection request endpoint
     const sehatdocBaseUrl = (process.env.SEHATDOC_API_URL || 'http://localhost:5001').replace(/\/api$/, '');
