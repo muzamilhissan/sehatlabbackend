@@ -366,22 +366,40 @@ router.post('/sehatdoc-connect', authenticateToken as any, async (req: AuthReque
 
     // Query SehatDoc public connection request endpoint
     const sehatdocBaseUrl = process.env.SEHATDOC_API_URL || 'http://localhost:5001';
-    const requestRes = await fetch(`${sehatdocBaseUrl}/api/public/sehatlab/request-connection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        clinicId,
-        labId: user.id.toString(),
-        labName: settings.labName || user.name || 'SehatLab Diagnostic Centre',
-        labEmail: user.email,
-        labSecret,
-        labUrl: process.env.SEHATLAB_BACKEND_URL || 'http://localhost:6010'
-      })
-    });
+    const labUrl = process.env.SEHATLAB_BACKEND_URL || 'http://localhost:6010';
+    console.log('[sehatdoc-connect] Sending request to:', `${sehatdocBaseUrl}/api/public/sehatlab/request-connection`);
+    console.log('[sehatdoc-connect] labUrl callback set to:', labUrl);
+
+    let requestRes: any;
+    try {
+      requestRes = await fetch(`${sehatdocBaseUrl}/api/public/sehatlab/request-connection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clinicId,
+          labId: user.id.toString(),
+          labName: settings.labName || user.name || 'SehatLab Diagnostic Centre',
+          labEmail: user.email,
+          labSecret,
+          labUrl
+        })
+      });
+    } catch (fetchErr: any) {
+      console.error('[sehatdoc-connect] Network error reaching SehatDoc:', fetchErr.message);
+      return res.status(502).json({ error: `Cannot reach SehatDoc server at ${sehatdocBaseUrl}. Is the server online?` });
+    }
 
     if (!requestRes.ok) {
-      const err = await requestRes.json();
-      return res.status(requestRes.status).json({ error: err.error || 'Failed to submit connection request' });
+      const text = await requestRes.text();
+      let errMessage = 'Failed to submit connection request';
+      try {
+        const errData = JSON.parse(text);
+        errMessage = errData.error || errMessage;
+      } catch (e) {
+        console.error('[sehatdoc-connect] SehatDoc returned non-JSON:', text.substring(0, 200));
+        errMessage = `SehatDoc returned status ${requestRes.status}. Response: ${text.substring(0, 100)}`;
+      }
+      return res.status(requestRes.status).json({ error: errMessage });
     }
 
     // Save pending connection locally
@@ -392,7 +410,7 @@ router.post('/sehatdoc-connect', authenticateToken as any, async (req: AuthReque
       sehatdocEmail: email,
       sehatdocClinicId: clinicId,
       sehatdocClinicName: clinicName,
-      labUrl: process.env.SEHATLAB_BACKEND_URL || 'http://localhost:6010'
+      labUrl
     };
 
     await prisma.user.update({
